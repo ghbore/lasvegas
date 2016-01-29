@@ -1,0 +1,414 @@
+#! /bin/env perl
+use strict;
+use warnings;
+use List::Util qw/max/;
+use Carp;
+use Getopt::Long;
+
+$SIG{INT} = sub { confess "Caught!"; };
+
+{package dice;
+use Carp;
+use POSIX;
+
+use overload '==' => sub {
+	my ($a, $b) = @_;
+	$a->owner->id eq $b->owner->id and
+	$a->{type} eq $b->{type} and
+	$a->{point} == $b->{point};
+};
+
+our $max = 6;
+our $min = 1;
+our %types = map {$_=>1} qw/normal large banker retail/;
+
+sub new {
+	my $class = shift;
+	my %attr = @_;
+	confess "owner is required" unless $attr{owner} and 'player' eq ref $attr{owner};
+	confess "type is required" unless $attr{type} and exists $types{$attr{type}};
+
+	bless {
+		owner => $attr{owner},
+		type => $attr{type},
+		point => 0,
+		available => 1,
+		_ => '',
+	}, ref $class || $class;
+}
+
+sub validPoint {
+	my ($self, $value) = @_;
+	$value >= $min and $value <= $max and floor($value) == $value;
+}
+
+sub throw {
+	my $self = shift;
+	$self->{_} = '';
+	$self->{point} = $min + floor(rand($max-$min+1));
+}
+
+sub owner { shift->{owner}; }
+sub isBanker { shift->{type} eq 'banker'; }
+sub type { shift->{type}; }
+sub weight { shift->{type} eq 'large'? 2: 1; }
+sub point { shift->{point}; }
+sub available { shift->{available}; }
+sub assign { shift->{available} = 0; }
+sub reset {
+	my $self = shift;
+	$self->{point} = 0;
+	$self->{available} = 1;
+	$self->{_} = '';
+}
+
+sub draw {
+	my $self = shift;
+	return $self->{_} if $self->{_};
+	$self->{_} = sprintf "\033[1;%s%sm%*s\033[m",
+		$self->{type} eq 'large'? '4;': '',
+		$self->{owner}->color,
+		length($max)+1,
+		$self->{point};
+	return $self->{_};
+}
+
+1;}
+
+{package player;
+use Carp;
+
+our %color = qw/black 0 red 1 green 2 yellow 3 blue 4 magenta 5 cyan 6 white 7/;
+our %colorCode = map {
+	my $b = $_;
+	map {sprintf('%d%d',$_-30,$b-40) => "$_;$b"} 30..37
+} 40..47;
+our %reservedColorCode = qw/50 1 70 1/;
+
+our $banker;
+our $retail;
+
+our $maxlen = 6;
+
+sub new {
+	my $class = shift;
+	my ($normal, $large, $banker, $retail, %attr) = @_;
+
+	my $id;
+	if ($attr{color} and 2 == grep {exists $color{$_}} split /[^a-zA-Z]+/, $attr{color}){
+		$id = join('', map {$color{$_}} split /[^a-zA-Z]+/, $attr{color});
+	}else {
+		$id = (grep {! exists $reservedColorCode{$_}} keys %colorCode)[0];
+		confess "No color left"	unless $id;
+	}
+	$reservedColorCode{$id} = 1;
+
+	my $self = bless {
+		id => $id,
+		name => $attr{name} || '???',
+		color => $colorCode{$id},
+		dice => [],
+		income => 0,
+	}, ref $class || $class;
+
+	my @normalDice = map dice->new(owner=>$self, type=>'normal'), 1..$normal;
+	my @largeDice = map dice->new(owner=>$self, type=>'large'), 1..$large;
+	my @bankerDice = map dice->new(owner=>$self->banker, type=>'banker'), 1..$banker;
+	my @retailDice = map dice->new(owner=>$self->retail, type=>'retail'), 1..$retail;
+	$self->banker->addDice(@bankerDice);
+	$self->retail->addDice(@retailDice);
+	@{$self->{dice}} = (@normalDice, @largeDice, @bankerDice, @retailDice);
+	$self;
+}
+
+sub dice { @{+shift->{dice}}; }
+sub diceLeft { grep $_->available, @{+shift->{dice}}; }
+sub throw {
+	my $self = shift;
+	$_->throw foreach grep $_->available, @{$self->{dice}};
+}
+
+sub id { +shift->{id}; }
+sub color { +shift->{color}; }
+sub income { +shift->{income}; }
+
+sub drawName {
+	my $self = shift;
+	sprintf "\033[1;%sm%${maxlen}.${maxlen}s\033[m", $self->{color}, $self->{name};
+}
+sub drawIncome {
+	my $self = shift;
+	sprintf "%${maxlen}.${maxlen}s", $self->{income};
+}
+sub drawDice {
+	my $self = shift;
+	join(' ', map $_->draw, sort {
+		$a->point<=>$b->point ||
+		$b->weight<=>$a->weight
+	} $self->diceLeft);
+}
+
+sub choose {
+	my ($self, $point) = shift;
+	my @dice = grep {$_->available and $_->point == $point} @{$self->{dice}};
+	$_->assign foreach @dice;
+	@dice;
+}
+
+sub win {
+	my $self = shift;
+	$self->{income} += shift;
+}
+
+sub banker {
+	return $banker if $banker;
+	my $class = shift;
+	$banker = bless {
+		id => '50',
+		name => 'banker',
+		color => $colorCode{50},
+		dice => [],
+		income => 0,
+	}, ref $class || $class;
+}
+
+sub retail {
+	return $retail if $retail;
+	my $class = shift;
+	$retail = bless {
+		id => 70,
+		name => 'retail',
+		color => $colorCode{70},
+		dice => [],
+		income => 0,
+	}, ref $class || $class;
+}
+
+sub addDice {
+	my $self = shift;
+	push @{$self->{dice}}, @_;
+}
+
+1;}
+
+{package card;
+use POSIX;
+use Carp;
+
+our $min = 1;
+our $max = 10;
+our $thres = 5;
+
+sub new {
+	my ($class, $point) = @_;
+	confess "point is required" unless defined($point) and dice->validPoint($point);
+
+	my ($n, $i, @n) = (0);
+	while ($n <= $thres){
+		$i = $min + floor(rand($max-$min+1));
+		push @n, $i;
+		$n += $i;
+	}
+
+	bless {
+		point => $point,
+		money => [sort {$b<=>$a} @n],
+		dice => [],
+	}, ref $class || $class;
+}
+
+sub reset {
+	my $self = shift;
+
+	my ($n, $i, @n) = (0);
+	while ($n <= $thres){
+		$i = $min + floor(rand($max-$min+1));
+		push @n, $i;
+		$n += $i;
+	}
+	@{$self->{money}} = sort {$b<=>$a} @n;
+	@{$self->{dice}} = ();
+}
+
+sub hasDice {
+	my $self = shift;
+	@{$self->{dice}} > 0;
+}
+
+sub sortDice {
+	my $self = shift;
+	my %weight = map {$_->owner->id => 0} @{$self->{dice}};
+	$weight{$_->owner->id} += $_->weight foreach @{$self->{dice}};
+	@{$self->{dice}} = sort {
+		$weight{$b->owner->id} <=> $weight{$a->owner->id} ||
+		$a->owner->id cmp $b->owner->id ||
+		$b->weight <=> $a->weight
+	} @{$self->{dice}};
+}
+
+sub addDice {
+	my $self = shift;
+	push @{$self->{dice}}, @_;
+	$self->sortDice;
+}
+
+sub removeDiceByCompIndex {
+	my ($self, $index) = @_;
+	my $k = 0;
+	my $i;
+	for ($i = 0; $i < $#{$self->{dice}} and $k < $index; $i ++){
+		$k ++ unless $self->{dice}[$i] == $self->{dice}[$i+1];
+	}
+	my $rm = splice @{$self->{dice}}, $i, 1;
+	$self->sortDice;
+	$rm;
+}
+
+sub summary {
+	my $self = shift;
+	my %player = map {$_->owner->id => $_->owner} @{$self->{dice}};
+	my %weight = map {$_->owner->id => 0} @{$self->{dice}};
+	$weight{$_->owner->id} += $_->weight foreach @{$self->{dice}};
+	my %weightCount;
+	$weightCount{$_} ++ foreach values %weight;
+	%weight = reverse %weight;
+	my @winner = @weight{sort {$b<=>$a} grep $weightCount{$_} == 1, keys %weightCount};
+	for (my $i = 0; $i < @{$self->{money}} and $i < @winner; $i ++){
+		$player{$winner[$i]}->win($self->{money}[$i]);
+	}
+}
+
+sub draw {
+	my $self = shift;
+	my $len = length($max);
+	my @money = map ' ', 1..ceil($thres / $min);
+	@money[0..$#{$self->{money}}] = @{$self->{money}};
+
+	my @compactDice;
+	my $n = 1;
+	my $point;
+	for (my $i = 1; $i < @{$self->{dice}}; $i ++){
+		if ($self->{dice}[$i] == $self->{dice}[$i-1]){
+			$n ++;
+		}else {
+			push @compactDice, $self->{dice}[$i-$n]->draw;
+			$point = $self->{dice}[$i-$n]->point;
+			$compactDice[-1] =~ s#m\s*$point\033#m$n\033#;
+			$n = 1;
+		}
+	}
+	if (@{$self->{dice}}){
+		push @compactDice, $self->{dice}[-1]->draw;
+		$point = $self->{dice}[-1]->point;
+		$compactDice[-1] =~ s#m\s*$point\033#m$n\033#;
+	}
+
+	join('| ', sprintf('%2.2s', $self->{point}),
+		join(' ', map sprintf("%${len}s", $_), @money),
+		join(' ',  @compactDice)
+	);
+}
+
+1;}
+
+
+my ($nNormal, $nLarge, $nBanker, $nRetail) = (8,1,1,2);
+my $round = 4;
+my (@name, %ply);
+my $nplayer = 3;
+
+GetOptions(
+	'h|help|?' => \&usage,
+	'normal=i' => \$nNormal,
+	'large=i' => \$nLarge,
+	'banker=i' => \$nBanker,
+	'retail=i' => \$nRetail,
+	'name=s' => \@name,
+	'player=s' => \%ply,
+	'round=i' => \$round,
+	'n-player=i' => \$nplayer,
+);
+@name = split /,/, join /,/, @name;
+
+my @player;
+if (@name){
+	@player = map player->new($nNormal, $nLarge, $nBanker, $nRetail, name=>$_, color=>$ply{$_}), @name;
+}else {
+	@player = map player->new($nNormal, $nLarge, $nBanker, $nRetail), 1..$nplayer;
+}
+my @card = map card->new($_), 1..6;
+my @garbage = ();
+
+my $point;
+my @dice;
+my $replaceIndex;
+for (my $i = 0; $i < $round; $i ++){
+	while (grep 0<$_->diceLeft, @player){
+		foreach my $player (grep $_->diceLeft, @player){
+			&clear;
+			&showPlayerPanel;
+			&divline;
+			&showCardPanel;
+			&divline;
+			&showGarbagePanel;
+			&divline;
+			print join(' ', "Now it's", $player->drawName, "turn"), "\n";
+			$player->throw;
+			print ' 'x4, $player->drawDice, "\n";
+			@dice = ();
+			while (@dice == 0){
+				print "Choose a point: ";
+				chomp($point = <STDIN>);
+				@dice = grep $_->point == $point, $player->diceLeft;
+				last if @dice;
+			}
+			$_->assign foreach @dice;
+			if ($card[$point-1]->hasDice){
+				foreach (grep $_->isBanker, @dice){
+					print "Choose compact index to replace: ";
+					chomp($replaceIndex = <STDIN>);
+					push @garbage, $card[$point-1]->removeDiceByCompIndex($replaceIndex-1) if $replaceIndex > 0;
+				}
+			}
+			$card[$point-1]->addDice(@dice);
+		}
+	}
+	$_->summary foreach @card;
+	if ($i != $round - 1){
+		$_->reset foreach map $_->dice, @player;
+		$_->reset foreach @card;
+		@garbage = ();
+	}
+}
+$_->summary foreach @card;
+&clear; &showPlayerPanel; &divline; &showCardPanel; &divline; &showGarbagePanel; &divline;
+my $winnerIncome = max map $_->income, @player;
+my @winner = grep $_->income == $winnerIncome, @player;
+print join(' ', "Congratulation!", (map {$_->drawName} @winner), @winner>1?'are winners':'is winner'), "\n";
+
+sub clear { print "\e[H\e[J"; }
+sub divline { print "\n"; }
+sub showPlayerPanel {
+	print "Players Panel\n";
+	printf "%-*s: %s\n", 8, 'Player', join(' | ', map $_->drawName, @player, player->banker, player->retail), "\n";
+	printf "%-*s: %s\n", 8, 'Income', join(' | ', map $_->drawIncome, @player, player->banker, player->retail), "\n";
+	printf "%-*s: %s\n", 8, 'Dice',  join(' | ', map {sprintf "%*.*s", $player::maxlen, $player::maxlen, 0+$_->diceLeft} @player, player->banker, player->retail), "\n";
+}
+sub showCardPanel {
+	print "Card Panel\n";
+	print join("\n", map $_->draw, @card), "\n";
+}
+sub showGarbagePanel {
+	print "Garbage Panel\n";
+	print join(' ', map $_->draw, @garbage), "\n";
+}
+
+sub usage {
+	print <<USAGE;
+lasvegas -normal 8 -large 1 -banker 1 -retail 2 -round 4 \
+         -name name1,name2,... \
+         -player name1=foreground,background ... \
+         -n-player 3
+USAGE
+	exit 1;
+}
