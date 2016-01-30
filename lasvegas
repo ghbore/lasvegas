@@ -5,7 +5,7 @@ use List::Util qw/max/;
 use Carp;
 use Getopt::Long;
 
-$SIG{INT} = sub { confess "Caught!"; };
+$SIG{INT} = sub { confess "\nCaught!"; };
 
 {package dice;
 use Carp;
@@ -20,7 +20,7 @@ use overload '==' => sub {
 
 our $max = 6;
 our $min = 1;
-our %types = map {$_=>1} qw/normal large banker retail/;
+our %types = qw/normal 1 large 1 banker 1 retail 1/;
 
 sub new {
 	my $class = shift;
@@ -327,8 +327,12 @@ GetOptions(
 	'player=s' => \%ply,
 	'round=i' => \$round,
 	'n-player=i' => \$nplayer,
+	'config-dice-point=i' => sub { $dice::max = pop; },
+	'config-banknote-max=i' => sub { $card::max = pop; },
+	'config-banknote-thres=i' => sub { $card::thres = pop; },
+	'config-player-name-length=i' => sub { $player::maxlen = pop; },
 );
-@name = split /,/, join /,/, @name;
+@name = split /,/, join ',', @name;
 
 my @player;
 if (@name){
@@ -336,7 +340,7 @@ if (@name){
 }else {
 	@player = map player->new($nNormal, $nLarge, $nBanker, $nRetail), 1..$nplayer;
 }
-my @card = map card->new($_), 1..6;
+my @card = map card->new($_), $dice::min..$dice::max;
 my @garbage = ();
 
 my $point;
@@ -406,9 +410,13 @@ sub showGarbagePanel {
 sub usage {
 	print <<USAGE;
 lasvegas -normal 8 -large 1 -banker 1 -retail 2 -round 4 \
-         -name name1,name2,... \
+         -name name1,name2,... ... \
          -player name1=foreground,background ... \
-         -n-player 3
+         -n-player 3 \
+	 --config-dice-point 6 \
+	 --config-banknote-max 10 \
+	 --config-banknote-thres 5 \
+	 --config-player-name-length 6
 USAGE
 	exit 1;
 }
