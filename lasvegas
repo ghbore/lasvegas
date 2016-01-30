@@ -350,6 +350,8 @@ for (my $i = 0; $i < $round; $i ++){
 	while (grep 0<$_->diceLeft, @player){
 		foreach my $player (grep $_->diceLeft, @player){
 			&clear;
+			printf "Round %d / %d\n", $i+1, $round;
+			&divline;
 			&showPlayerPanel;
 			&divline;
 			&showCardPanel;
