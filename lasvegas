@@ -376,13 +376,7 @@ for (my $i = 0; $i < $round; $i ++){
 		foreach my $player (grep $_->diceLeft, @player){
 			&clear;
 			printf "Round %d / %d\n", $i+1, $round;
-			&divline;
-			&showPlayerPanel;
-			&divline;
-			&showCardPanel;
-			&divline;
-			&showGarbagePanel;
-			&divline;
+			&divline; &showPlayerPanel; &divline; &showCardPanel; &divline; &showGarbagePanel; &divline;
 			print join(' ', "Now it's", $player->drawName, "'s turn"), "\n";
 			$player->throw;
 			print ' 'x4, $player->drawDice, "\n";
@@ -412,13 +406,12 @@ for (my $i = 0; $i < $round; $i ++){
 	print "Press any key to process: ";
 	chomp($point = <STDIN>);
 	$_->settle foreach @card;
-	if ($i != $round - 1){
-		$_->reset foreach map $_->dice, @player;
-		$_->reset foreach @card;
-		@garbage = ();
-	}
+
+	$_->reset foreach @card;
+	$_->reset foreach map $_->dice, @player;
+	@garbage = ();
 }
-&clear; &showPlayerPanel; &divline; &showCardPanel; &divline; &showGarbagePanel; &divline;
+&clear; &showPlayerPanel; &divline;
 my $winnerIncome = max map $_->income, @player;
 my @winner = grep $_->income == $winnerIncome, @player;
 print join(' ', "Congratulation!", (map {$_->drawName} @winner), @winner>1?'are winners':'is winner'), "\n";
