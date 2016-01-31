@@ -176,7 +176,7 @@ sub retail {
 	return $retail if $retail;
 	my $class = shift;
 	$retail = bless {
-		id => 70,
+		id => '70',
 		name => 'retail',
 		color => $colorCode{70},
 		dice => [],
@@ -214,7 +214,13 @@ sub new {
 		point => $point,
 		money => [sort {$b<=>$a} @n],
 		dice => [],
+		winner => [],
 	}, ref $class || $class;
+}
+
+sub winner {
+	my $self = shift;
+	@{$self->{winner}};
 }
 
 sub reset {
@@ -228,6 +234,7 @@ sub reset {
 	}
 	@{$self->{money}} = sort {$b<=>$a} @n;
 	@{$self->{dice}} = ();
+	@{$self->{winner}} = ();
 }
 
 sub hasDice {
@@ -269,12 +276,18 @@ sub summary {
 	my %player = map {$_->owner->id => $_->owner} @{$self->{dice}};
 	my %weight = map {$_->owner->id => 0} @{$self->{dice}};
 	$weight{$_->owner->id} += $_->weight foreach @{$self->{dice}};
-	my %weightCount;
+	my %weightCount = map {$_=>0} values %weight;
 	$weightCount{$_} ++ foreach values %weight;
 	%weight = reverse %weight;
 	my @winner = @weight{sort {$b<=>$a} grep $weightCount{$_} == 1, keys %weightCount};
 	for (my $i = 0; $i < @{$self->{money}} and $i < @winner; $i ++){
-		$player{$winner[$i]}->win($self->{money}[$i]);
+		push @{$self->{winner}}, $player{$winner[$i]};
+	}
+}
+sub settle {
+	my $self = shift;
+	for (my $i = 0; $i < @{$self->{money}} and $i < @{$self->{winner}}; $i ++){
+		$self->{winner}[$i]->win($self->{money}[$i]);
 	}
 }
 
@@ -306,6 +319,18 @@ sub draw {
 	join('| ', sprintf('%2.2s', $self->{point}),
 		join(' ', map sprintf("%${len}s", $_), @money),
 		join(' ',  @compactDice)
+	);
+}
+
+sub drawSummary {
+	my $self = shift;
+	my $len = length($max);
+	my @money = map ' ', 1..ceil($thres / $min);
+	@money[0..$#{$self->{money}}] = @{$self->{money}};
+
+	join('| ', sprintf('%2.2s', $self->{point}),
+		join(' ', map sprintf("%${len}s", $_), @money),
+		join(' ', map $_->drawName, @{$self->{winner}})
 	);
 }
 
@@ -358,7 +383,7 @@ for (my $i = 0; $i < $round; $i ++){
 			&divline;
 			&showGarbagePanel;
 			&divline;
-			print join(' ', "Now it's", $player->drawName, "turn"), "\n";
+			print join(' ', "Now it's", $player->drawName, "'s turn"), "\n";
 			$player->throw;
 			print ' 'x4, $player->drawDice, "\n";
 			@dice = ();
@@ -380,17 +405,24 @@ for (my $i = 0; $i < $round; $i ++){
 		}
 	}
 	$_->summary foreach @card;
+	&clear;
+	printf "Round %d / %d\n", $i+1, $round;
+	&divline;
+	&showPlayerPanel; &divline; &showCardSummaryPanel; &divline; &showGarbagePanel; &divline;
+	print "Press any key to process: ";
+	chomp($point = <STDIN>);
+	$_->settle foreach @card;
 	if ($i != $round - 1){
 		$_->reset foreach map $_->dice, @player;
 		$_->reset foreach @card;
 		@garbage = ();
 	}
 }
-$_->summary foreach @card;
 &clear; &showPlayerPanel; &divline; &showCardPanel; &divline; &showGarbagePanel; &divline;
 my $winnerIncome = max map $_->income, @player;
 my @winner = grep $_->income == $winnerIncome, @player;
 print join(' ', "Congratulation!", (map {$_->drawName} @winner), @winner>1?'are winners':'is winner'), "\n";
+
 
 sub clear { print "\e[H\e[J"; }
 sub divline { print "\n"; }
@@ -403,6 +435,10 @@ sub showPlayerPanel {
 sub showCardPanel {
 	print "Card Panel\n";
 	print join("\n", map $_->draw, @card), "\n";
+}
+sub showCardSummaryPanel {
+	print "Card Panel\n";
+	print join("\n", map $_->drawSummary, @card), "\n";
 }
 sub showGarbagePanel {
 	print "Garbage Panel\n";
